@@ -143,8 +143,7 @@ tg://proxy?server=...&port=...&secret=... | 145.2 ms
 - **Вы должны быть подписаны на мониторимые Telegram-каналы**
 - **При первом запуске требуется авторизация по QR-коду или телефону**
 - На Windows ошибки сброса соединения автоматически подавляются
-- Channel Scraper работает в один проход (нет бесконечного цикла)
-- Файл `working.txt` доступен только для чтения и не изменяется
+- Файл `working.txt` не изменяется
 - **API-ключи идентичны ключам официального Telegram Desktop**
 
 ---
@@ -153,8 +152,8 @@ tg://proxy?server=...&port=...&secret=... | 145.2 ms
 
 - **Оригинальный Proxy-Checker**: [exelite-dev/Proxy-Checker](https://github.com/exelite-dev/Proxy-Checker)
 - **AI-помощники разработки**:
-  - **Koda** (AI-ассистент от NLP-Core-Team)
-  - **Google AI** (поиск и документация)
+  - **Koda** [AI-ассистент](https://kodacode.ru/))
+  - **Google ИИ-ассистент** 
 - **Telethon**: https://telethon.readthedocs.io/
 
 ---
