@@ -1,7 +1,8 @@
 # Настройки скрипта Telegram Channel Checker
 
 # Закрытые или открытые каналы, на которые вы подписаны
-CHANNELS = ["mtp4tg", "TProxyRU", "ProxyMTProto"]
+
+CHANNELS = ["mtp4tg", "TProxyRU", "ProxyMTProto", "tgmtproxylol" ]
 
 API_ID = 2040
 API_HASH = 'b18441a1ff607e10a989891a5462e627'
