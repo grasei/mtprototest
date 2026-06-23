@@ -90,135 +90,77 @@ def _looks_like_secret(value):
     return bool(MT_SECRET_RE.fullmatch(cleaned))
 
 
-def load_proxies_from_config():
-    """Загрузка прокси из файла с улучшенной валидацией и поддержкой всех форматов"""
+def load_proxies_from_file(filename):
+    """Загрузка прокси из файла с валидацией"""
     proxies = []
-    seen = set()  # Для удаления дубликатов
+    if not os.path.exists(filename):
+        return proxies
     
-    # 1. Загружаем из config.txt
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
+    with open(filename, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            
+            # Пропускаем строки с метаданными (содержат |), если это не URL
+            if "|" in line and "://" not in line:
+                line = line.split("|")[0].strip()
+            elif "|" in line:
+                # Для URL берем первую часть до пробела или разделителя
+                line = line.split()[0] if line.split() else line
+
+            server_val, port_val, secret_val = None, None, None
+
+            # 1. ТЕЛЕГРАМ ССЫЛКИ
+            if "tg://proxy" in line.lower() or "t.me/proxy" in line.lower():
+                parsed = urllib.parse.urlparse(line)
+                params = urllib.parse.parse_qs(parsed.query)
+                server_val = (params.get("server", [None])[0] or "").strip().rstrip(".")
+                port_val = _safe_int(params.get("port", [None])[0])
+                secret_val = _normalize_secret(params.get("secret", [None])[0])
                 
-                server_val, port_val, secret_val = None, None, None
+            # 2. URL-СТИЛЬ
+            elif "://" in line:
+                parsed = urllib.parse.urlparse(line)
+                server_val = (parsed.hostname or "").strip().rstrip(".")
+                port_val = parsed.port
+                secret_val = _normalize_secret(urllib.parse.parse_qs(parsed.query).get("secret", [None])[0])
 
-                # 1. ТЕЛЕГРАМ ССЫЛКИ: tg://proxy?server=...&port=...&secret=...
-                #    или https://t.me/proxy?server=...&port=...&secret=...
-                if "tg://proxy" in line.lower() or "t.me/proxy" in line.lower():
-                    parsed = urllib.parse.urlparse(line)
-                    params = urllib.parse.parse_qs(parsed.query)
-                    server_val = (params.get("server", [None])[0] or "").strip().rstrip(".")
-                    port_val = _safe_int(params.get("port", [None])[0])
-                    secret_val = _normalize_secret(params.get("secret", [None])[0])
-                    
-                # 2. URL-стиль: http://, socks5://, mtproto://
-                elif "://" in line:
-                    parsed = urllib.parse.urlparse(line)
-                    server_val = (parsed.hostname or "").strip().rstrip(".")
-                    port_val = parsed.port
-                    secret_val = _normalize_secret(urllib.parse.parse_qs(parsed.query).get("secret", [None])[0])
+            # 3. КЛАССИЧЕСКИЙ ФОРМАТ
+            else:
+                parts = [p.strip() for p in line.split(":")]
+                if len(parts) >= 2:
+                    server_val = parts[0].rstrip(".")
+                    port_val = _safe_int(parts[1])
+                    if len(parts) >= 3 and _looks_like_secret(parts[2]):
+                        secret_val = _normalize_secret(parts[2])
 
-                # 3. КЛАССИЧЕСКИЙ ФОРМАТ: server:port:secret или server:port
-                else:
-                    parts = [p.strip() for p in line.split(":")]
-                    if len(parts) >= 2:
-                        server_val = parts[0].rstrip(".")
-                        port_val = _safe_int(parts[1])
-                        # Если есть третья часть и это похоже на секрет — считаем MTProto
-                        if len(parts) >= 3 and _looks_like_secret(parts[2]):
-                            secret_val = _normalize_secret(parts[2])
+            if not server_val or not port_val:
+                continue
+            if not (1 <= port_val <= 65535):
+                continue
+            if secret_val and not _looks_like_secret(secret_val):
+                continue
 
-                # ВАЛИДАЦИЯ ПОЛЕЙ
-                if not server_val or not port_val:
-                    continue
-                if not (1 <= port_val <= 65535):
-                    continue
+            proxies.append({
+                "server": server_val,
+                "port": port_val,
+                "secret": secret_val,
+                "fails": 0
+            })
+    return proxies
 
-                # Для MTProto секрет обязателен
-                if secret_val and not _looks_like_secret(secret_val):
-                    continue
 
-                # УДАЛЕНИЕ ДУБЛИКАТОВ
-                proxy_key = (server_val.lower(), port_val, secret_val or "")
-                if proxy_key in seen:
-                    continue
+def load_proxies_from_config():
+    """Загрузка прокси из CONFIG_FILE и WORKING_FILE с удалением дубликатов"""
+    proxies = []
+    seen = set()
+    for f in [CONFIG_FILE, WORKING_FILE]:
+        for p in load_proxies_from_file(f):
+            proxy_key = (p["server"].lower(), p["port"], p["secret"] or "")
+            if proxy_key not in seen:
                 seen.add(proxy_key)
-
-                proxies.append({
-                    "server": server_val,
-                    "port": port_val,
-                    "secret": secret_val,
-                    "fails": 0
-                })
-    
-    # 2. Загружаем из working.txt (если существует), игнорируя дубликаты
-    if os.path.exists(WORKING_FILE):
-        with open(WORKING_FILE, "r", encoding="utf-8") as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                
-                # Пропускаем строки с метаданными (содержат |)
-                if "|" in line:
-                    # Извлекаем только часть до разделителя |
-                    proxy_part = line.split("|")[0].strip()
-                else:
-                    # Если нет |, берём до первого пробела (на случай случайных пробелов)
-                    proxy_part = line.split()[0] if line.split() else line
-                
-                if not proxy_part:
-                    continue
-                
-                server_val, port_val, secret_val = None, None, None
-
-                # Парсинг по тем же правилам
-                if "tg://proxy" in proxy_part.lower() or "t.me/proxy" in proxy_part.lower():
-                    parsed = urllib.parse.urlparse(proxy_part)
-                    params = urllib.parse.parse_qs(parsed.query)
-                    server_val = (params.get("server", [None])[0] or "").strip().rstrip(".")
-                    port_val = _safe_int(params.get("port", [None])[0])
-                    secret_val = _normalize_secret(params.get("secret", [None])[0])
-
-                elif "://" in proxy_part:
-                    parsed = urllib.parse.urlparse(proxy_part)
-                    server_val = (parsed.hostname or "").strip().rstrip(".")
-                    port_val = parsed.port
-                    secret_val = _normalize_secret(urllib.parse.parse_qs(parsed.query).get("secret", [None])[0])
-
-                else:
-                    parts = [p.strip() for p in proxy_part.split(":")]
-                    if len(parts) >= 2:
-                        server_val = parts[0].rstrip(".")
-                        port_val = _safe_int(parts[1])
-                        if len(parts) >= 3 and _looks_like_secret(parts[2]):
-                            secret_val = _normalize_secret(parts[2])
-
-                # ВАЛИДАЦИЯ ПОЛЕЙ
-                if not server_val or not port_val:
-                    continue
-                if not (1 <= port_val <= 65535):
-                    continue
-
-                if secret_val and not _looks_like_secret(secret_val):
-                    continue
-
-                # УДАЛЕНИЕ ДУБЛИКАТОВ (пропускаем если уже есть из config.txt)
-                proxy_key = (server_val.lower(), port_val, secret_val or "")
-                if proxy_key in seen:
-                    continue
-                seen.add(proxy_key)
-
-                proxies.append({
-                    "server": server_val,
-                    "port": port_val,
-                    "secret": secret_val,
-                    "fails": 0
-                })
-    
+                proxies.append(p)
     return proxies
 
 
@@ -482,9 +424,23 @@ async def main_loop():
     # 4. Один цикл обновления пула (без бесконечного повторения)
     print("\n=== Круг обновления пула ===")
     candidates = await parse_channels_via_telegram(client)
-    print(f"Найдено {len(candidates)} потенциальных адресов в каналах.")
+    
+    # Добавляем в кандидаты прокси из WORKING_FILE для повторной проверки
+    working_file_candidates = load_proxies_from_file(WORKING_FILE)
+    candidates.extend(working_file_candidates)
+    
+    # Удаляем прокси из WORKING_FILE из текущего пула, чтобы они были проверены заново
+    # (test_and_add_proxy пропускает дубликаты, уже присутствующие в proxy_pool)
+    if working_file_candidates:
+        proxy_pool = [p for p in proxy_pool if not any(
+            p["server"].lower() == c["server"].lower() and 
+            p["port"] == c["port"]
+            for c in working_file_candidates
+        )]
+        
+    print(f"Найдено {len(candidates)} потенциальных адресов (включая {len(working_file_candidates)} из WORKING_FILE).")
 
-       # Ограничиваем параллелизм до 5 одновременных подключений
+    # Ограничиваем параллелизм до 5 одновременных подключений
     semaphore = asyncio.Semaphore(5)
     # Асинхронно тестируем всех кандидатов с ограничением
     tasks = [test_and_add_proxy(c, semaphore) for c in candidates]
